@@ -7,10 +7,13 @@
 - Briefly describe your initial UML design.
 - What classes did you include, and what responsibilities did you assign to each?
 
+1. Add and manage a pet profile so care tasks are tied to the right pet.
+2. Create and schedule care tasks (walks, feeding, medication, appointments) with duration and priority.
+3. View today’s prioritized task list to see what to do now and what comes next.
+
 **b. Design changes**
 
-- Did your design change during implementation?
-- If yes, describe at least one change and why you made it.
+Yes. After reviewing the class skeleton, I made three design changes. I connected `Appointment` more clearly to `Pet` by adding appointment-related attributes and method stubs, because appointments were originally defined as a separate object without a strong relationship to the rest of the model. I also added a `scheduled_start` field to `Task` so conflict detection has a clear time to compare, instead of relying only on a due time. Finally, I simplified the scheduler interface so it builds a daily schedule from the `Owner` object instead of taking separate owner, pet, and task inputs, which reduces duplicate data flow and makes the design easier to maintain.
 
 ---
 
