@@ -191,3 +191,79 @@ def test_complete_weekly_task_creates_next_week_instance():
     assert next_task is not None
     assert next_task.due_time is not None
     assert next_task.due_time.date() == completed_at.date() + timedelta(days=7)
+
+
+# ---------------------------------------------------------------------------
+# AI-generated edge-case tests for scheduler behavior
+# ---------------------------------------------------------------------------
+
+def test_complete_non_recurring_task_does_not_create_next_instance():
+    scheduler = Scheduler()
+    owner = Owner(owner_id="owner-1", name="Jordan", daily_time_available=120)
+    pet = Pet(pet_id="pet-1", name="Mochi", species="dog", age=4)
+    owner.add_pet(pet)
+
+    one_time_task = Task(
+        task_id="one-time-checkup",
+        pet_id="pet-1",
+        title="One-time checkup",
+        category="health",
+        duration_minutes=20,
+        priority="medium",
+        frequency="once",
+        due_time=datetime.combine(date.today(), time(11, 0)),
+        recurring=False,
+    )
+    pet.add_task(one_time_task)
+
+    next_task = scheduler.complete_task_and_generate_next(owner, one_time_task)
+    assert one_time_task.status == "complete"
+    assert next_task is None
+
+
+def test_complete_task_raises_when_owner_pet_mapping_missing():
+    scheduler = Scheduler()
+    owner = Owner(owner_id="owner-1", name="Jordan", daily_time_available=120)
+    task = Task(
+        task_id="orphan-task",
+        pet_id="unknown-pet",
+        title="Orphan recurring task",
+        category="walk",
+        duration_minutes=10,
+        priority="low",
+        frequency="daily",
+        due_time=datetime.combine(date.today(), time(12, 0)),
+        recurring=True,
+    )
+
+    with pytest.raises(ValueError):
+        scheduler.complete_task_and_generate_next(owner, task)
+
+
+def test_weekly_rollover_keeps_original_due_weekday_cadence():
+    """Expected behavior: weekly cadence should anchor to due date, not completion date."""
+    scheduler = Scheduler()
+    owner = Owner(owner_id="owner-1", name="Jordan", daily_time_available=120)
+    pet = Pet(pet_id="pet-1", name="Mochi", species="dog", age=4)
+    owner.add_pet(pet)
+
+    weekly_task = Task(
+        task_id="weekly-cadence-task",
+        pet_id="pet-1",
+        title="Weekly cadence",
+        category="grooming",
+        duration_minutes=25,
+        priority="medium",
+        frequency="weekly",
+        due_time=datetime.combine(date.today(), time(10, 0)),
+        recurring=True,
+    )
+    pet.add_task(weekly_task)
+
+    # Completed one day late; next due should still follow original due cadence.
+    completed_at = weekly_task.due_time + timedelta(days=1)
+    next_task = scheduler.complete_task_and_generate_next(owner, weekly_task, completed_at)
+
+    assert next_task is not None
+    assert next_task.due_time is not None
+    assert next_task.due_time.date() == weekly_task.due_time.date() + timedelta(days=7)

@@ -53,3 +53,27 @@ This project now includes several scheduling improvements:
 - Priority-aware schedule building with time-budget fitting and human-readable explanations.
 
 These updates make daily plans more realistic while keeping the logic explainable and easy to test.
+
+## Testing PawPal+
+
+As I built PawPal+, I used tests as a safety net to make sure new scheduling features did what I expected and did not break earlier behavior.
+
+Run tests from the project root with:
+
+```bash
+python -m pytest
+```
+
+Right now, the suite checks the most important day-to-day behaviors, including:
+
+- Task state transitions (pending to complete)
+- Adding tasks to pets and validating ownership relationships
+- Sorting tasks by time
+- Filtering tasks by pet, status, and status-or-pet-name logic
+- Recurrence rule behavior for daily and weekly scheduling
+- Conflict detection for overlapping timed tasks
+- Recurring rollover when completing daily and weekly tasks
+
+Confidence Level: ★★★★☆ (4/5)
+
+Why this rating: I feel good about the core reliability because the main scheduling paths are covered and passing. There is still one meaningful edge-case discussion around weekly rollover cadence (should the next task be based on completion date or original due date). Once that policy is finalized and tested, confidence would move closer to 5/5.
