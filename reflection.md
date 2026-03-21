@@ -26,8 +26,9 @@ Yes. After reviewing the class skeleton, I made three design changes. I connecte
 
 **b. Tradeoffs**
 
-- Describe one tradeoff your scheduler makes.
-- Why is that tradeoff reasonable for this scenario?
+One tradeoff my scheduler makes is using a greedy "priority-then-time" approach instead of searching for a globally optimal schedule. It sorts tasks, accepts non-conflicting items in order, and then skips tasks that do not fit the remaining time. This can miss combinations that might produce a better overall plan, but it keeps the logic easy to explain and predictable for users.
+
+This tradeoff is reasonable for this scenario because PawPal+ is a daily planning assistant where clarity and speed matter more than perfect optimization. A pet owner can quickly understand why tasks were chosen, and the app can generate a plan fast without complex computation.
 
 ---
 

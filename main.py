@@ -36,22 +36,7 @@ def build_demo_data() -> tuple[Owner, Scheduler]:
     owner.add_pet(mochi)
     owner.add_pet(luna)
 
-    mochi.add_task(
-        Task(
-            task_id="task-1",
-            pet_id="pet-1",
-            title="Morning walk",
-            category="walk",
-            duration_minutes=30,
-            priority="high",
-            description="Neighborhood walk before work.",
-            frequency="daily",
-            due_time=today_at(8, 0),
-            scheduled_start=today_at(8, 0),
-            recurring=True,
-            is_fixed_time=True,
-        )
-    )
+    # Intentionally added out of chronological order for sorting demos.
     mochi.add_task(
         Task(
             task_id="task-2",
@@ -66,6 +51,7 @@ def build_demo_data() -> tuple[Owner, Scheduler]:
             recurring=True,
         )
     )
+
     luna.add_task(
         Task(
             task_id="task-3",
@@ -82,6 +68,39 @@ def build_demo_data() -> tuple[Owner, Scheduler]:
             is_fixed_time=True,
         )
     )
+
+    mochi.add_task(
+        Task(
+            task_id="task-1",
+            pet_id="pet-1",
+            title="Morning walk",
+            category="walk",
+            duration_minutes=30,
+            priority="high",
+            description="Neighborhood walk before work.",
+            frequency="daily",
+            due_time=today_at(8, 0),
+            scheduled_start=today_at(8, 0),
+            recurring=True,
+            is_fixed_time=True,
+        )
+    )
+
+    completed_cleanup = Task(
+        task_id="task-4",
+        pet_id="pet-1",
+        title="Backyard cleanup",
+        category="housekeeping",
+        duration_minutes=12,
+        priority="low",
+        description="Pick up and sanitize the yard area.",
+        frequency="daily",
+        due_time=today_at(7, 15),
+        scheduled_start=today_at(7, 15),
+        recurring=True,
+    )
+    completed_cleanup.mark_complete()
+    mochi.add_task(completed_cleanup)
 
     scheduler = Scheduler(max_daily_minutes=120)
     return owner, scheduler
@@ -125,6 +144,61 @@ def print_schedule(owner: Owner, scheduler: Scheduler) -> None:
     print(schedule.summarize())
 
 
+def print_algorithm_demo(owner: Owner, scheduler: Scheduler) -> None:
+    """Show helper algorithms for sorting, filtering, recurring handling, and conflicts."""
+    todays_tasks = [task for task in owner.get_all_tasks() if task.is_due_today(date.today())]
+    pending_for_mochi = scheduler.filter_tasks(
+        todays_tasks,
+        pet_id="pet-1",
+        allowed_statuses=["pending"],
+    )
+
+    print()
+    print("Algorithm Demo")
+    print("=" * 14)
+    print(f"Today's due tasks: {len(todays_tasks)}")
+    print(f"Pending tasks for Mochi: {len(pending_for_mochi)}")
+
+    pet_name_by_id = {pet.pet_id: pet.name for pet in owner.pets}
+
+    print("\nAs added (out of order):")
+    for task in todays_tasks:
+        task_time = task.scheduled_start or task.due_time
+        display_time = task_time.strftime("%I:%M %p") if task_time else "Flexible"
+        pet_name = pet_name_by_id.get(task.pet_id, task.pet_id)
+        print(f"- {display_time}: {task.title} [{pet_name}] ({task.status})")
+
+    ordered_by_time = scheduler.sort_by_time(todays_tasks)
+    print("\nSorted by time:")
+    for task in ordered_by_time:
+        task_time = task.scheduled_start or task.due_time
+        display_time = task_time.strftime("%I:%M %p") if task_time else "Flexible"
+        pet_name = pet_name_by_id.get(task.pet_id, task.pet_id)
+        print(f"- {display_time}: {task.title} [{pet_name}] ({task.status})")
+
+    complete_or_luna = scheduler.filter_tasks_by_status_or_pet_name(
+        ordered_by_time,
+        owner,
+        completion_status="complete",
+        pet_name="Luna",
+    )
+    print("\nFiltered (status=complete OR pet_name=Luna):")
+    for task in complete_or_luna:
+        task_time = task.scheduled_start or task.due_time
+        display_time = task_time.strftime("%I:%M %p") if task_time else "Flexible"
+        pet_name = pet_name_by_id.get(task.pet_id, task.pet_id)
+        print(f"- {display_time}: {task.title} [{pet_name}] ({task.status})")
+
+    conflicts = scheduler.detect_basic_conflicts(ordered_by_time)
+    if conflicts:
+        print("\nBasic conflicts:")
+        for conflict in conflicts:
+            print(f"- {conflict}")
+    else:
+        print("\nBasic conflicts: none")
+
+
 if __name__ == "__main__":
     demo_owner, demo_scheduler = build_demo_data()
     print_schedule(demo_owner, demo_scheduler)
+    print_algorithm_demo(demo_owner, demo_scheduler)

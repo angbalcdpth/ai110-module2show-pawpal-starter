@@ -8,6 +8,15 @@ from typing import Optional
 
 
 PRIORITY_RANK = {"high": 0, "medium": 1, "low": 2}
+WEEKDAY_TO_INDEX = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
 
 
 @dataclass
@@ -20,11 +29,52 @@ class RecurrenceRule:
 
     def generate_occurrences(self, start: date, end: date) -> list[date]:
         """Return all dates this rule fires between start and end (inclusive)."""
-        raise NotImplementedError
+        if end < start:
+            return []
+
+        effective_start = max(start, self.start_date) if self.start_date else start
+        effective_end = min(end, self.end_date) if self.end_date else end
+        if effective_end < effective_start:
+            return []
+
+        occurrences: list[date] = []
+        current = effective_start
+
+        if self.frequency == "daily":
+            day_offset = (current - effective_start).days
+            while current <= effective_end:
+                if day_offset % max(self.interval, 1) == 0:
+                    occurrences.append(current)
+                current += timedelta(days=1)
+                day_offset += 1
+            return occurrences
+
+        if self.frequency == "weekly":
+            allowed_days = {
+                WEEKDAY_TO_INDEX[day.lower()]
+                for day in self.days_of_week
+                if day.lower() in WEEKDAY_TO_INDEX
+            }
+            if not allowed_days:
+                allowed_days = {effective_start.weekday()}
+
+            anchor = self.start_date or effective_start
+            while current <= effective_end:
+                weeks_from_anchor = (current - anchor).days // 7
+                if (
+                    weeks_from_anchor >= 0
+                    and weeks_from_anchor % max(self.interval, 1) == 0
+                    and current.weekday() in allowed_days
+                ):
+                    occurrences.append(current)
+                current += timedelta(days=1)
+            return occurrences
+
+        return []
 
     def is_active_on(self, target_date: date) -> bool:
         """Return True if this recurrence rule applies on target_date."""
-        raise NotImplementedError
+        return target_date in self.generate_occurrences(target_date, target_date)
 
 
 @dataclass
@@ -73,8 +123,14 @@ class Task:
 
     def is_due_today(self, target_date: date) -> bool:
         """Return True if this task should appear on the given date."""
+        if self.status == "complete":
+            return False
+
+        if self.recurring and self.recurrence_rule is not None:
+            return self.recurrence_rule.is_active_on(target_date)
+
         reference_time = self.scheduled_start or self.due_time
-        if reference_time is not None:
+        if reference_time is not None and not self.recurring:
             return reference_time.date() == target_date
 
         if self.recurring:
@@ -111,11 +167,23 @@ class Appointment:
 
     def to_task(self) -> Task:
         """Convert this appointment into a fixed-time Task for scheduling."""
-        raise NotImplementedError
+        return Task(
+            task_id=f"appointment-{self.appointment_id}",
+            pet_id=self.pet_id,
+            title=self.title,
+            category="appointment",
+            duration_minutes=self.duration_minutes,
+            priority="high",
+            description=self.notes,
+            frequency="once",
+            due_time=self.start_time,
+            scheduled_start=self.start_time,
+            is_fixed_time=self.is_fixed_time,
+        )
 
     def overlaps_with(self, task: Task) -> bool:
         """Return True if this appointment's time window overlaps with task."""
-        raise NotImplementedError
+        return self.to_task().conflicts_with(task)
 
 
 @dataclass
@@ -282,31 +350,30 @@ class Scheduler:
     max_daily_minutes: Optional[int] = None
     prioritization_strategy: str = "priority_then_time"
 
-    def build_daily_schedule(self, owner: Owner, target_date: date) -> Schedule:
+    def build_daily_schedule(
+        self,
+        owner: Owner,
+        target_date: date,
+        pet_id: Optional[str] = None,
+        include_statuses: Optional[list[str]] = None,
+    ) -> Schedule:
         """Collect, prioritize, de-conflict, and fit tasks into a daily Schedule."""
         available_minutes = self.max_daily_minutes or owner.get_available_time()
+        statuses = include_statuses or ["pending"]
         candidate_tasks = [
-            task
-            for task in owner.get_all_tasks()
-            if task.status != "complete" and task.is_due_today(target_date)
+            task for task in owner.get_all_tasks() if task.is_due_today(target_date)
         ]
+        candidate_tasks = self.filter_tasks(
+            candidate_tasks,
+            pet_id=pet_id,
+            allowed_statuses=statuses,
+        )
 
         candidate_tasks.extend(
-            Task(
-                task_id=f"appointment-{appointment.appointment_id}",
-                pet_id=appointment.pet_id,
-                title=appointment.title,
-                category="appointment",
-                duration_minutes=appointment.duration_minutes,
-                priority="high",
-                description=appointment.notes,
-                frequency="once",
-                due_time=appointment.start_time,
-                scheduled_start=appointment.start_time,
-                is_fixed_time=appointment.is_fixed_time,
-            )
+            appointment.to_task()
             for appointment in owner.get_all_appointments()
             if appointment.start_time.date() == target_date
+            and (pet_id is None or appointment.pet_id == pet_id)
         )
 
         prioritized_tasks = self.prioritize_tasks(candidate_tasks)
@@ -339,6 +406,174 @@ class Scheduler:
                 task.duration_minutes,
             ),
         )
+
+    def sort_by_time(self, tasks: list[Task]) -> list[Task]:
+        """Return tasks sorted by scheduled time.
+
+        Timed tasks are ordered earliest-to-latest, while tasks with no time are
+        placed at the end.
+        """
+        return sorted(
+            tasks,
+            key=lambda task: task.scheduled_start or task.due_time or datetime.max,
+        )
+
+    def sort_tasks_by_time(self, tasks: list[Task]) -> list[Task]:
+        """Backward-compatible wrapper for sort_by_time."""
+        return self.sort_by_time(tasks)
+
+    def filter_tasks(
+        self,
+        tasks: list[Task],
+        pet_id: Optional[str] = None,
+        allowed_statuses: Optional[list[str]] = None,
+    ) -> list[Task]:
+        """Filter tasks by pet and status.
+
+        When allowed_statuses is omitted, completed tasks are excluded by default.
+        """
+        normalized_statuses = (
+            {status.lower() for status in allowed_statuses}
+            if allowed_statuses is not None
+            else None
+        )
+
+        filtered: list[Task] = []
+        for task in tasks:
+            if pet_id is not None and task.pet_id != pet_id:
+                continue
+            if normalized_statuses is not None:
+                if task.status not in normalized_statuses:
+                    continue
+            elif task.status == "complete":
+                continue
+            filtered.append(task)
+        return filtered
+
+    def filter_tasks_by_status_or_pet_name(
+        self,
+        tasks: list[Task],
+        owner: Owner,
+        completion_status: Optional[str] = None,
+        pet_name: Optional[str] = None,
+    ) -> list[Task]:
+        """Filter tasks by completion status OR pet name.
+
+        If both filters are provided, a task is included when it matches either
+        condition. If neither filter is provided, the original list is returned.
+        """
+        normalized_status = completion_status.lower() if completion_status else None
+        normalized_pet_name = pet_name.lower() if pet_name else None
+
+        pet_name_by_id = {pet.pet_id: pet.name.lower() for pet in owner.pets}
+
+        if normalized_status is None and normalized_pet_name is None:
+            return list(tasks)
+
+        filtered: list[Task] = []
+        for task in tasks:
+            matches_status = (
+                normalized_status is not None and task.status == normalized_status
+            )
+            matches_pet = (
+                normalized_pet_name is not None
+                and pet_name_by_id.get(task.pet_id) == normalized_pet_name
+            )
+
+            if matches_status or matches_pet:
+                filtered.append(task)
+
+        return filtered
+
+    def _create_next_recurring_task(
+        self,
+        task: Task,
+        completed_at: Optional[datetime] = None,
+    ) -> Optional[Task]:
+        """Create the next recurring task instance for daily/weekly frequencies.
+
+        Daily tasks roll forward by one day, weekly tasks by seven days.
+        Returns None for non-recurring tasks or unsupported frequencies.
+        """
+        if not task.recurring or task.frequency not in {"daily", "weekly"}:
+            return None
+
+        completion_moment = completed_at or datetime.now()
+        delta = timedelta(days=1) if task.frequency == "daily" else timedelta(days=7)
+
+        # Preserve the original task time-of-day when available.
+        time_source = task.scheduled_start or task.due_time or completion_moment
+        next_due = datetime.combine(completion_moment.date() + delta, time_source.time())
+
+        next_scheduled_start = (
+            next_due if (task.is_fixed_time or task.scheduled_start is not None) else None
+        )
+        next_task_id = f"{task.task_id}-next-{next_due.strftime('%Y%m%d%H%M%S')}"
+
+        return Task(
+            task_id=next_task_id,
+            pet_id=task.pet_id,
+            title=task.title,
+            category=task.category,
+            duration_minutes=task.duration_minutes,
+            priority=task.priority,
+            description=task.description,
+            frequency=task.frequency,
+            due_time=next_due,
+            scheduled_start=next_scheduled_start,
+            recurring=task.recurring,
+            recurrence_rule=task.recurrence_rule,
+            is_fixed_time=task.is_fixed_time,
+            status="pending",
+        )
+
+    def complete_task_and_generate_next(
+        self,
+        owner: Owner,
+        task: Task,
+        completed_at: Optional[datetime] = None,
+    ) -> Optional[Task]:
+        """Mark task complete and append its next recurring occurrence.
+
+        The next task is attached to the matching pet on the owner profile.
+        Returns None when the task is not eligible for recurrence rollover.
+        """
+        task.mark_complete()
+
+        next_task = self._create_next_recurring_task(task, completed_at=completed_at)
+        if next_task is None:
+            return None
+
+        target_pet = next((pet for pet in owner.pets if pet.pet_id == task.pet_id), None)
+        if target_pet is None:
+            raise ValueError("Task pet_id does not match any pet in owner profile.")
+
+        target_pet.add_task(next_task)
+        return next_task
+
+    def detect_basic_conflicts(self, tasks: list[Task]) -> list[str]:
+        """Detect simple time overlaps in a time-sorted task list.
+
+        This fast check compares each timed task with only the previous timed
+        task after sorting.
+        """
+        ordered = self.sort_by_time(tasks)
+        conflicts: list[str] = []
+        previous_timed_task: Optional[Task] = None
+
+        for task in ordered:
+            task_start = task.scheduled_start or task.due_time
+            if task_start is None:
+                continue
+
+            if previous_timed_task is not None and previous_timed_task.conflicts_with(task):
+                conflicts.append(
+                    f"{previous_timed_task.title} conflicts with {task.title}"
+                )
+
+            previous_timed_task = task
+
+        return conflicts
 
     def resolve_conflicts(self, tasks: list[Task]) -> tuple[list[Task], list[str]]:
         """Drop tasks that overlap an already-accepted task; return accepted list and conflict messages."""
